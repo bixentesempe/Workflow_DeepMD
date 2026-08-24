@@ -1,0 +1,164 @@
+# ============================================================
+#  Pipeline configuration
+#  Modify this file to adapt the pipeline to your system.
+#  All paths are relative to the working directory (work_dir).
+# ============================================================
+
+work_dir: "."   # root directory for all outputs
+
+# ----------------------------------------------------------
+# Step 01 — SOAP Descriptor Computation
+# ----------------------------------------------------------
+descriptors:
+  input_roots: ["./data"]          # one or more directories with structure files
+  input_patterns: ["vasprun*.xml", "*.traj"]
+
+  # File selection: "all" | "random" | "stride"
+  file_selection_mode: "all"
+  random_file_count: null             # used only when mode="random"
+  file_stride: null                   # used only when mode="stride"
+  selection_seed: 0
+
+  frame_stride: 1                     # 1 = keep all frames; 2 = every other frame
+
+  soap:
+    r_cut: 5.0
+    n_max: 4
+    l_max: 4
+    sigma: 1.0
+    compression:
+      mode: "mu2"                     # set null to disable compression
+
+  include_forces: false               # append Fx/Fy/Fz to SOAP vectors
+  force_components: [0, 1, 2]        # which force components to append
+
+  # Optional: collapse every chemical species to a single element before
+  # computing SOAP, so descriptors compare pure geometry regardless of
+  # composition. Off by default. Uncomment to enable:
+  # modify_species: false
+  # target_species: "C"
+
+  clean_output_dir: true              # remove previous descriptor files before saving
+  output_dir: "desc"                  # relative to work_dir
+
+# ----------------------------------------------------------
+# Step 02 — Dimensionality Reduction
+# ----------------------------------------------------------
+dim_reduction:
+  input_dir: "desc"                   # where to read descriptors from
+  output_dir: "embedding"             # where to save the embedding
+
+  method: "pca"                       # "pca" | "umap" | "tsne"
+  use_forces: false                   # include force dimensions in reduction
+
+  pca:
+    n_components: 0.95                # float → explained variance; int → n components
+    random_state: 42
+    save_model: true
+    save_matrix: true
+
+  umap:
+    n_components: 10
+    n_neighbors: 15
+    min_dist: 0.0
+    metric: "euclidean"
+    random_state: 42
+    pca_prereduce_dim: null           # int or null; pre-reduce with PCA before UMAP
+
+  tsne:
+    n_components: 10
+    perplexity: 30
+    n_iter: 1000
+    random_state: 42
+    pca_prereduce_dim: null
+
+# ----------------------------------------------------------
+# Step 03 — Sampling
+# ----------------------------------------------------------
+sampling:
+  input_dir: "desc"
+  embedding_dir: "embedding"
+  output_dir: "selected"
+
+  use_embedding: true                 # false → use raw standardized SOAP
+
+  # Sampling algorithm: "fps" | "grid" | "kpp" | "kmedoids" | "density_fps" | "hdbscan"
+  method: "fps"
+  seed: 0
+  progress: true
+
+  # Auto-sampling: stop when coverage target is reached
+  auto_sampling: true
+  auto_strategy: "seeded"            # "seeded" (recommended) | "resample"
+  fixed_k: 50000                     # used only when auto_sampling=false
+
+  # Coverage target parameters
+  target_mean_cov: 0.99
+  enable_plateau_stop: true
+  coverage_threshold_min: 0.95       # plateau detection starts above this value
+  plateau_window: 5
+  delta_cov: 0.002
+  coverage_mode: "width"
+  target_width: 0.10
+  min_bins: 20
+  max_bins: 10000
+
+  # Resample strategy params
+  k_start: 100
+  k_max: 200000
+  growth: 1.25
+  check_every: null
+
+  # Seeded strategy params
+  batch: 100
+  k_max_seeded: 200000
+
+  save_files: true                   # export .traj and .xyz
+
+# ----------------------------------------------------------
+# Step 04 — Sampling Analysis
+# ----------------------------------------------------------
+analysis:
+  # Full dataset (reference)
+  input_roots: ["data"]
+  patterns: ["*.traj"] # ["vasprun*.xml", "XDATCAR*", "*.xyz", "*.extxyz"]
+  selected_dir: "selected"
+
+  # Histogram bin widths
+  bin_width_energy: 0.02             # eV
+  bin_width_force: 0.05              # eV/Å
+
+  save_plots: true                   # NOTE: not currently read by step04_analysis.py
+                                      # (histograms are always saved) — kept as a
+                                      # documented no-op until wired up or removed
+  output_dir: "selected"
+
+# ----------------------------------------------------------
+# Step 05 — Validation Set Extraction
+# ----------------------------------------------------------
+validation:
+  selected_dir: "selected"
+  method: "FPS"                      # must match the method used in step 03
+  percent: 20                        # percentage of sampled set → validation
+  seed: 42
+
+# ----------------------------------------------------------
+# Step 06 — Test Set Generation
+# ----------------------------------------------------------
+test:
+  desc_dir: "desc"
+  selected_root: "selected"
+  n_test: 2000                       # max structures in test set
+  seed: 12345
+
+  # Stratification (optional): classify leftover structures by how far the
+  # gas molecule sits above the surface, and draw a chosen fraction from
+  # "close" (near-surface) vs "far" (free gas) instead of a plain random draw.
+  stratified: true             # false → plain uniform random draw
+  gas_species: ["H"]
+  surface_species: ["W"]
+  z_threshold: 3.0             # Å — at or below this = "close" to the surface
+  close_fraction: 0.75         # 75% close, 25% far
+  pre_sample_factor: 20        # classify pre_sample_factor × n_test candidates
+                                # before drawing the stratified split (avoids
+                                # reading every leftover structure from disk)

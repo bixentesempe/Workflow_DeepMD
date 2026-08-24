@@ -1,0 +1,9 @@
+/var/spool/slurmd/job23767/slurm_script: line 33: /work/bsempe/env/data_sampling/.data_sampling/activate: No such file or directory
+Traceback (most recent call last):
+  File "/home/bsempe/Scripts/Workflow_DeepMD/data_sampling/Pipeline/run_pipeline.py", line 42, in <module>
+    from pipeline_utils import (
+    ...<4 lines>...
+    )
+  File "/home/bsempe/Scripts/Workflow_DeepMD/data_sampling/Pipeline/pipeline_utils.py", line 16, in <module>
+    import yaml
+ModuleNotFoundError: No module named 'yaml'

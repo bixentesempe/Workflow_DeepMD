@@ -1,0 +1,5 @@
+find /cluster/python/3.13.9
+Job started at Tue Jun  2 12:13:57 CEST 2026
+Running on node: c4n21.ism.bx1
+Working directory: /home/bsempe/Scripts/Workflow_DeepMD/data_sampling/Pipeline
+Job finished at Tue Jun  2 12:13:58 CEST 2026
