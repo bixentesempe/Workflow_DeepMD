@@ -11,13 +11,13 @@ folder (`data_sampling`) — simplest way to know which env goes with which
 project.
 
 ```bash
-conda create -n data_sampling python=3.11
-conda activate data_sampling
+python -m venv data_sampling
+source data_sampling/bin/activate
 pip install -r environment.txt
 ```
 
-(A plain `python -m venv data_sampling && source data_sampling/bin/activate`
-works too if you don't use conda.)
+(Conda works too, if you prefer it:
+`conda create -n data_sampling python=3.11 && conda activate data_sampling`.)
 
 ## AIMD_process.py
 
