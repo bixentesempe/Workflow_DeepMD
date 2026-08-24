@@ -642,10 +642,10 @@ def process_group(group_name, group_dir, cfg):
                             trunc_details[-1]['n_kept'] = 0 if too_short else n_keep
                             trunc_details[-1]['energy_break'] = cause
                         if cfg['verbose_etot']:
+                            outcome_msg = ('segment too short, REJECTED' if too_short
+                                          else f'kept {n_keep}/{n_seg}')
                             tqdm.write(f"    {traj_dir}: {cause} at frame {n_keep} "
-                                       f"→ {'segment too short, REJECTED'
-                                            if too_short else
-                                            f'kept {n_keep}/{n_seg}'}")
+                                       f"→ {outcome_msg}")
                         if too_short:
                             continue
                         frames = frames[:n_keep]
@@ -911,9 +911,9 @@ def main():
           f"{'≤ %.3f eV' % cfg['max_drift'] if cfg['check_global'] else 'disabled'}")
     print(f"Step 3 — E_tot/step    : "
           f"{'≤ %.3f eV' % cfg['max_step'] if cfg['check_step'] else 'disabled'}")
-    print(f"Action on breakdown    : "
-          f"{'cut at breakdown (min %d frames)' % cfg['min_frames_kept']
-             if cfg['energy_fail'] == 'cut' else 'reject the trajectory'}")
+    action_msg = ('cut at breakdown (min %d frames)' % cfg['min_frames_kept']
+                  if cfg['energy_fail'] == 'cut' else 'reject the trajectory')
+    print(f"Action on breakdown    : {action_msg}")
     print(f"E_tot check scope      : KEPT SEGMENT (after step 2)")
     trunc_msg = ('rebound (back above z_init, tol=%.2f Å) + '
                  'dissoc (d_HH > %.1f Å)' % (cfg['z_rebound_tol'], cfg['d_dissoc'])
