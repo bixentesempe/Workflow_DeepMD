@@ -1,7 +1,5 @@
 # Data Sampling Pipeline
 
-Refactored from Jupyter notebooks into standalone, chainable Python scripts.
-
 ## How it works, in one paragraph per step
 
 1. **Descriptors** (SOAP) turn every atomic structure into a fixed-length
@@ -51,7 +49,7 @@ pipeline/
 At minimum, set your input data path:
 ```yaml
 descriptors:
-  input_roots: ["./your_data_folder"]
+  input_roots: ["./data"]
 ```
 
 ### 2. Run the full pipeline
