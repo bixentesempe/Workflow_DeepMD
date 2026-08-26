@@ -246,44 +246,26 @@ def read_total_energies_xml(vasprun_path):
       </calculation>
 
     Only the <energy> that is a DIRECT child of <calculation> is read.
-
-    Uses an INCREMENTAL parser (ET.iterparse), not ET.parse(). A run that
-    was killed mid-write (VASP crash, watchdog STOPCAR, job timeout) leaves
-    a vasprun.xml with no closing tags — ET.parse() raises on the whole
-    file and we'd lose every energy, INCLUDING the ones from the clean part
-    at the start. iterparse salvages every <calculation> block that is
-    syntactically complete before the cut, exactly like ASE's own reader
-    does — so this stays in sync with the frame count ASE returns.
-
-    Returns (e_tot, truncated):
-      e_tot     : array (N_steps,) in eV, or None if nothing was readable.
-      truncated : True if the XML ended abruptly (incomplete document).
-                  This is itself a red flag independent of the energies
-                  read — a run that got killed mid-step is exactly the
-                  kind of trajectory step 3 exists to catch, so the caller
-                  treats `truncated=True` as a rejection, not a "pass
-                  through unchecked".
+    Returns an array (N_steps,) in eV, or None if absent/unreadable.
     """
-    import xml.etree.ElementTree as ET
-    e_tot = []
-    truncated = False
     try:
-        for _event, elem in ET.iterparse(vasprun_path, events=("end",)):
-            if elem.tag == "calculation":
-                blocks = elem.findall("energy")          # direct children only
-                if blocks:
-                    tag = blocks[-1].find('i[@name="total"]')
-                    if tag is not None:
-                        try:
-                            e_tot.append(float(tag.text))
-                        except (ValueError, TypeError):
-                            pass
-                elem.clear()                             # keep memory flat on long AIMD runs
-    except ET.ParseError:
-        truncated = True
-    except OSError:
-        return None, False
-    return (np.array(e_tot) if e_tot else None), truncated
+        import xml.etree.ElementTree as ET
+        root = ET.parse(vasprun_path).getroot()
+    except Exception:
+        return None
+
+    e_tot = []
+    for calc in root.iter('calculation'):
+        blocks = calc.findall('energy')          # direct children only
+        if not blocks:
+            continue
+        tag = blocks[-1].find('i[@name="total"]')
+        if tag is not None:
+            try:
+                e_tot.append(float(tag.text))
+            except (ValueError, TypeError):
+                pass
+    return np.array(e_tot) if e_tot else None
 
 
 def read_vasprun_safe(path):
@@ -559,7 +541,6 @@ def process_group(group_name, group_dir, cfg):
     n_raw = n_trunc = n_topo = 0
     n_rej_global = n_rej_step = n_unchecked = n_mismatch = 0
     n_frames_cut_energy = 0
-    n_truncated_xml = n_errors = 0
     trunc_stats = {'rebound': 0, 'dissociation': 0, 'none': 0,
                    'start_dissociated': 0}
     trunc_details, econs_details = [], []
@@ -567,162 +548,149 @@ def process_group(group_name, group_dir, cfg):
     try:
         for vfile in tqdm(files, desc=f'  {group_name}', unit='traj'):
             traj_dir = os.path.basename(os.path.dirname(vfile))
-            # Any unexpected failure on THIS file (corrupted cell, NaN
-            # positions after a numerical blow-up, degenerate geometry...)
-            # must not abort the whole group -- log it and move on.
-            try:
-                # ── E_tot: lightweight XML read, BEFORE ASE parsing ──
-                # Simply set aside for step 3 (judged on the kept segment, after
-                # truncation at step 2): no rejection here, so we never lose a
-                # correct initial segment because of a drift that happens later
-                # in the trajectory.
-                e_tot, xml_truncated = read_total_energies_xml(vfile)
-                if xml_truncated:
-                    n_truncated_xml += 1
-                    tqdm.write(f"  ⚠  {traj_dir}: vasprun.xml tronqué "
-                               f"(run interrompu en cours d'écriture) → REJETÉE")
-                    continue
-                if e_tot is None or len(e_tot) < 2:
-                    n_unchecked += 1
-                    tqdm.write(f"  ⚠  {traj_dir}: E_tot unreadable → not checked")
 
-                # ── ASE parsing ──
-                frames = read_vasprun_safe(vfile)
+            # ── E_tot: lightweight XML read, BEFORE ASE parsing ──
+            # Simply set aside for step 3 (judged on the kept segment, after
+            # truncation at step 2): no rejection here, so we never lose a
+            # correct initial segment because of a drift that happens later
+            # in the trajectory.
+            e_tot = read_total_energies_xml(vfile)
+            if e_tot is None or len(e_tot) < 2:
+                n_unchecked += 1
+                tqdm.write(f"  ⚠  {traj_dir}: E_tot unreadable → not checked")
+
+            # ── ASE parsing ──
+            frames = read_vasprun_safe(vfile)
+            if not frames:
+                continue
+            n_raw += len(frames)
+
+            if e_tot is not None and len(e_tot) != len(frames):
+                n_mismatch += 1
+                tqdm.write(f"  ⚠  {traj_dir}: {len(e_tot)} E_tot vs "
+                           f"{len(frames)} ASE frames (incomplete steps)")
+
+            # ── STEP 1: topological consistency (order of symbols) ──
+            sym = list(frames[0].get_chemical_symbols())
+            if symbols_ref is None:
+                symbols_ref = sym
+            elif sym != symbols_ref:
+                n_topo += len(frames)
+                tqdm.write(f"  ⚠  {traj_dir}: symbol order ≠ reference → skip")
+                continue
+
+            # ── STEP 2: physical event (dissociation / rebound / trapping) ──
+            n_before = len(frames)
+            if cfg['truncate']:
+                sym_arr = np.array(sym, dtype='<U2')
+                keep_until, event, t_event, z_init = detect_truncation_index(
+                    frames, sym_arr, cfg)
+
+                # keep_until: None = keep all | -1 = discard all | n = [:n+1]
+                if keep_until is not None:
+                    frames = frames[:keep_until + 1] if keep_until >= 0 else []
+                    n_trunc += n_before - len(frames)
+                    if cfg['verbose_trunc']:
+                        tqdm.write(f"    {traj_dir}: {event} at t={t_event}, "
+                                   f"kept {len(frames)}/{n_before}")
+
+                trunc_stats[event] = trunc_stats.get(event, 0) + 1
+                trunc_details.append({
+                    'traj': traj_dir, 'event': event, 't_event': t_event,
+                    'z_init': z_init, 'n_kept': len(frames), 'n_total': n_before,
+                })
+
+                if event == 'start_dissociated':
+                    tqdm.write(f"  ⚠  {traj_dir}: d(H-H) > {cfg['d_dissoc']} Å "
+                               f"from the start → trajectory REJECTED")
                 if not frames:
                     continue
-                n_raw += len(frames)
 
-                if e_tot is not None and len(e_tot) != len(frames):
-                    n_mismatch += 1
-                    tqdm.write(f"  ⚠  {traj_dir}: {len(e_tot)} E_tot vs "
-                               f"{len(frames)} ASE frames (incomplete steps)")
-
-                # ── STEP 1: topological consistency (order of symbols) ──
-                sym = list(frames[0].get_chemical_symbols())
-                if symbols_ref is None:
-                    symbols_ref = sym
-                elif sym != symbols_ref:
-                    n_topo += len(frames)
-                    tqdm.write(f"  ⚠  {traj_dir}: symbol order ≠ reference → skip")
-                    continue
-
-                # ── STEP 2: physical event (dissociation / rebound / trapping) ──
-                n_before = len(frames)
-                if cfg['truncate']:
-                    sym_arr = np.array(sym, dtype='<U2')
-                    keep_until, event, t_event, z_init = detect_truncation_index(
-                        frames, sym_arr, cfg)
-
-                    # keep_until: None = keep all | -1 = discard all | n = [:n+1]
-                    if keep_until is not None:
-                        frames = frames[:keep_until + 1] if keep_until >= 0 else []
-                        n_trunc += n_before - len(frames)
-                        if cfg['verbose_trunc']:
-                            tqdm.write(f"    {traj_dir}: {event} at t={t_event}, "
-                                       f"kept {len(frames)}/{n_before}")
-
-                    trunc_stats[event] = trunc_stats.get(event, 0) + 1
-                    trunc_details.append({
-                        'traj': traj_dir, 'event': event, 't_event': t_event,
-                        'z_init': z_init, 'n_kept': len(frames), 'n_total': n_before,
-                    })
-
-                    if event == 'start_dissociated':
-                        tqdm.write(f"  ⚠  {traj_dir}: d(H-H) > {cfg['d_dissoc']} Å "
-                                   f"from the start → trajectory REJECTED")
-                    if not frames:
+            # ── STEP 3: energy conservation, on the kept segment (after step 2) ──
+            # A trajectory can be physically flawless up to the dissociation
+            # and then drift afterwards (fast H atoms, SCF failing to
+            # converge, H2 crossing the box). Judging the whole trajectory
+            # would discard perfectly usable frames.
+            if e_tot is not None:
+                n_seg = len(frames)
+                if len(e_tot) >= n_seg:
+                    e_seg = e_tot[:n_seg]
+                else:
+                    e_seg = e_tot          # mismatch already reported above
+                if cfg['energy_fail'] == 'cut':
+                    # --- CUT at the break, keep what came before ---
+                    n_keep, cause = find_energy_break(e_seg, cfg)
+                    if n_keep is not None:
+                        n_dropped = n_seg - n_keep
+                        too_short = n_keep < cfg['min_frames_kept']
+                        n_frames_cut_energy += n_dropped if not too_short else n_seg
+                        if cause == 'global':
+                            n_rej_global += n_dropped if not too_short else n_seg
+                        else:
+                            n_rej_step += n_dropped if not too_short else n_seg
+                        econs_details.append({
+                            'traj': traj_dir, 'scope': 'segment',
+                            'event': event if cfg['truncate'] else '',
+                            'check': cause, 'action': 'too_short' if too_short else 'cut',
+                            'n_steps': n_seg, 'n_frames_kept': 0 if too_short else n_keep,
+                            'drift_eV': float(np.ptp(e_seg)),
+                            'worst_step': int(n_keep),
+                            'E_first': float(e_seg[0]), 'E_last': float(e_seg[-1]),
+                            'E_min': float(e_seg.min()), 'E_max': float(e_seg.max()),
+                        })
+                        if trunc_details and trunc_details[-1]['traj'] == traj_dir:
+                            trunc_details[-1]['n_kept'] = 0 if too_short else n_keep
+                            trunc_details[-1]['energy_break'] = cause
+                        if cfg['verbose_etot']:
+                            outcome_msg = ('segment too short, REJECTED' if too_short
+                                          else f'kept {n_keep}/{n_seg}')
+                            tqdm.write(f"    {traj_dir}: {cause} at frame {n_keep} "
+                                       f"→ {outcome_msg}")
+                        if too_short:
+                            continue
+                        frames = frames[:n_keep]
+                else:
+                    # --- all-or-nothing ---
+                    v2, d2 = check_etot(e_seg, cfg, scope='segment')
+                    if v2.startswith('reject'):
+                        if v2 == 'reject_global':
+                            n_rej_global += n_seg
+                        else:
+                            n_rej_step += n_seg
+                        econs_details.append({'traj': traj_dir, 'action': 'dropped',
+                                              'event': event if cfg['truncate'] else '',
+                                              **d2})
+                        if trunc_details and trunc_details[-1]['traj'] == traj_dir:
+                            trunc_details[-1]['n_kept'] = 0
+                            trunc_details[-1]['dropped_energy'] = True
+                        if cfg['verbose_etot']:
+                            tqdm.write(f"    {traj_dir}: {d2['check']} = "
+                                       f"{d2['drift_eV']:.4f} eV on the kept segment "
+                                       f"({n_seg} frames) → REJECTED")
                         continue
 
-                # ── STEP 3: energy conservation, on the kept segment (after step 2) ──
-                # A trajectory can be physically flawless up to the dissociation
-                # and then drift afterwards (fast H atoms, SCF failing to
-                # converge, H2 crossing the box). Judging the whole trajectory
-                # would discard perfectly usable frames.
-                if e_tot is not None:
-                    n_seg = len(frames)
-                    if len(e_tot) >= n_seg:
-                        e_seg = e_tot[:n_seg]
-                    else:
-                        e_seg = e_tot          # mismatch already reported above
-                    if cfg['energy_fail'] == 'cut':
-                        # --- CUT at the break, keep what came before ---
-                        n_keep, cause = find_energy_break(e_seg, cfg)
-                        if n_keep is not None:
-                            n_dropped = n_seg - n_keep
-                            too_short = n_keep < cfg['min_frames_kept']
-                            n_frames_cut_energy += n_dropped if not too_short else n_seg
-                            if cause == 'global':
-                                n_rej_global += n_dropped if not too_short else n_seg
-                            else:
-                                n_rej_step += n_dropped if not too_short else n_seg
-                            econs_details.append({
-                                'traj': traj_dir, 'scope': 'segment',
-                                'event': event if cfg['truncate'] else '',
-                                'check': cause, 'action': 'too_short' if too_short else 'cut',
-                                'n_steps': n_seg, 'n_frames_kept': 0 if too_short else n_keep,
-                                'drift_eV': float(np.ptp(e_seg)),
-                                'worst_step': int(n_keep),
-                                'E_first': float(e_seg[0]), 'E_last': float(e_seg[-1]),
-                                'E_min': float(e_seg.min()), 'E_max': float(e_seg.max()),
-                            })
-                            if trunc_details and trunc_details[-1]['traj'] == traj_dir:
-                                trunc_details[-1]['n_kept'] = 0 if too_short else n_keep
-                                trunc_details[-1]['energy_break'] = cause
-                            if cfg['verbose_etot']:
-                                outcome_msg = ('segment too short, REJECTED' if too_short
-                                              else f'kept {n_keep}/{n_seg}')
-                                tqdm.write(f"    {traj_dir}: {cause} at frame {n_keep} "
-                                           f"→ {outcome_msg}")
-                            if too_short:
-                                continue
-                            frames = frames[:n_keep]
-                    else:
-                        # --- all-or-nothing ---
-                        v2, d2 = check_etot(e_seg, cfg, scope='segment')
-                        if v2.startswith('reject'):
-                            if v2 == 'reject_global':
-                                n_rej_global += n_seg
-                            else:
-                                n_rej_step += n_seg
-                            econs_details.append({'traj': traj_dir, 'action': 'dropped',
-                                                  'event': event if cfg['truncate'] else '',
-                                                  **d2})
-                            if trunc_details and trunc_details[-1]['traj'] == traj_dir:
-                                trunc_details[-1]['n_kept'] = 0
-                                trunc_details[-1]['dropped_energy'] = True
-                            if cfg['verbose_etot']:
-                                tqdm.write(f"    {traj_dir}: {d2['check']} = "
-                                           f"{d2['drift_eV']:.4f} eV on the kept segment "
-                                           f"({n_seg} frames) → REJECTED")
-                            continue
+            # ── STEP 4: stride ──
+            for li in range(0, len(frames), cfg['stride']):
+                atoms = frames[li]
+                E = atoms.get_potential_energy()
+                F = atoms.get_forces(apply_constraint=False)
 
-                # ── STEP 4: stride ──
-                for li in range(0, len(frames), cfg['stride']):
-                    atoms = frames[li]
-                    E = atoms.get_potential_energy()
-                    F = atoms.get_forces(apply_constraint=False)
+                if want_traj:
+                    traj_writer.write(_make_atoms(atoms, E, F, traj_dir,
+                                                  li, group_name))
+                if want_npz:
+                    coords_all.append(atoms.get_positions())
+                    forces_all.append(F)
+                    energies_all.append(E)
+                    cells_all.append(np.array(atoms.get_cell()))
+                    source_all.append(traj_dir)
+                    frame_all.append(li)
 
-                    if want_traj:
-                        traj_writer.write(_make_atoms(atoms, E, F, traj_dir,
-                                                      li, group_name))
-                    if want_npz:
-                        coords_all.append(atoms.get_positions())
-                        forces_all.append(F)
-                        energies_all.append(E)
-                        cells_all.append(np.array(atoms.get_cell()))
-                        source_all.append(traj_dir)
-                        frame_all.append(li)
-
-                    n_kept += 1
-                    e_min = min(e_min, E)
-                    e_max = max(e_max, E)
-                    e_sum += E
-                    e_sq  += E * E
-            except Exception as exc:
-                n_errors += 1
-                tqdm.write(f"  ❌ {traj_dir}: unexpected error, skipped "
-                           f"({type(exc).__name__}: {exc})")
-                continue
+                n_kept += 1
+                e_min = min(e_min, E)
+                e_max = max(e_max, E)
+                e_sum += E
+                e_sq  += E * E
     finally:
         if traj_writer is not None:
             traj_writer.close()
@@ -763,12 +731,6 @@ def process_group(group_name, group_dir, cfg):
           f"econs_global={n_rej_global}, econs_step={n_rej_step}, "
           f"frames_cut_energy={n_frames_cut_energy})  "
           f"E ∈ [{e_min:.3f}, {e_max:.3f}] eV  N_atoms={len(symbols_ref)}")
-    if n_truncated_xml:
-        print(f"  [{group_name}] ⚠  {n_truncated_xml} traj with a truncated "
-              f"vasprun.xml (run killed mid-write) → REJECTED")
-    if n_errors:
-        print(f"  [{group_name}] ❌ {n_errors} traj skipped on an unexpected "
-              f"error (see messages above)")
     if n_unchecked:
         print(f"  [{group_name}] ⚠  {n_unchecked} traj with unreadable E_tot "
               f"(passed through WITHOUT conservation check)")
@@ -790,8 +752,6 @@ def process_group(group_name, group_dir, cfg):
             'n_econs': n_rej_global + n_rej_step,
             'n_econs_unchecked': n_unchecked,
             'n_etot_mismatch': n_mismatch,
-            'n_truncated_xml': n_truncated_xml,
-            'n_errors': n_errors,
             'n_trunc': n_trunc, 'n_topo': n_topo,
             'n_frames_cut_energy': n_frames_cut_energy,
             'trunc_rebound': trunc_stats['rebound'],
