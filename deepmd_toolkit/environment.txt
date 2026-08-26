@@ -1,0 +1,15 @@
+# VERSION OF PYTHON BELOW 3.12 IS NEEDED
+# Full repository requirements.
+# `deepmd-kit` is needed for the DeepMD-specific notebooks in `data_preparation/`
+# and `model_analysis/`, but not for `lammps_md_preparation/` alone.
+# For the lighter LAMMPS-only workflow, use
+# `lammps_md_preparation/requirements.txt`.
+
+deepmd-kit[tensorflow]
+ase
+dpdata
+numpy
+pandas
+matplotlib
+tqdm
+jupyter

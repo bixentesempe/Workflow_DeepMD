@@ -51,3 +51,8 @@ python run_pipeline.py --dry-run
 
 See `Pipeline_smart_sampling/README.md` for the full picture (config
 options, output layout, HPC usage).
+
+## Verif_ASE.py 
+
+Check the atomic configurations of .traj files. Usefull to check 
+your data before a training. 
