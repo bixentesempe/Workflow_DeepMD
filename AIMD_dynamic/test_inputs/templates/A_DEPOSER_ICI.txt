@@ -1,0 +1,14 @@
+Fichiers attendus dans ce répertoire (voir README.md §1) :
+
+  INCAR              [présent]  ton INCAR, nettoyé
+  CONTCAR_050ML      [présent]  ton slab p(2x1) relaxé (les H2 qu'il contient sont ignorés)
+  CONTCAR_clean      [À FOURNIR] slab W(110) propre relaxé
+  CONTCAR_025ML      [À FOURNIR] slab avec 1 O en site 3-fold, relaxé
+  POTCAR_HW          [À FOURNIR] POTCAR concaténé dans l'ordre  H W
+  POTCAR_HOW         [À FOURNIR] POTCAR concaténé dans l'ordre  H O W
+  vdw_kernel.bindat  [À FOURNIR] si ta version de VASP l'exige pour LUSE_VDW
+
+Construction des POTCAR :
+  cat $VASP_PP/H/POTCAR $VASP_PP/W/POTCAR                   > POTCAR_HW
+  cat $VASP_PP/H/POTCAR $VASP_PP/O/POTCAR $VASP_PP/W/POTCAR > POTCAR_HOW
+(l'ordre doit suivre celui des espèces du POSCAR ; build_inputs.py le vérifie)

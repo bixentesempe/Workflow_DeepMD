@@ -1,0 +1,46 @@
+System = H2/W(110) - Single Point
+
+# General Setup
+ PREC   = Normal
+ ISTART = 0
+ ICHARG = 2
+
+# vdW (rPBE-vdW — identique AIMD)
+GGA      = RE
+LUSE_VDW = .TRUE.
+AGGAC    = 0.0000
+LASPH    = .TRUE.
+
+# Spin
+ ISPIN  = 1
+
+# Electronic relaxation (SCF)
+ NELM   = 500
+ NELMIN = 8
+ EDIFF  = 1E-06
+ LREAL  = auto
+ ALGO   = Very Fast
+
+# Smearing
+ SIGMA  = 0.05
+ ISMEAR = 0
+
+# Single point : pas d'étape ionique
+ IBRION = -1
+ NSW    = 0
+ ISYM   = 0
+
+# Mixing (identique AIMD pour cohérence)
+ AMIX     = 0.4
+ AMIN     = 0.1
+ BMIX     = 1.0
+ AMIX_MAG = 1.6
+ BMIX_MAG = 1.0
+
+# Fichiers — vasprun.xml suffit pour récupérer E + F
+ LWAVE  = .FALSE.
+ LCHARG = .FALSE.
+ NWRITE = 0
+
+# Parallélisation — à adapter selon les ressources du cluster
+ NPAR = 1   # à ajuster : typiquement sqrt(nb_cœurs)

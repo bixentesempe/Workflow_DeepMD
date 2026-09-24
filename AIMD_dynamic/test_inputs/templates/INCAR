@@ -1,0 +1,64 @@
+System = H2/W(110)-O
+
+# General Setup
+
+ PREC   = Normal   # Options: Normal, Medium, High, Low
+ ENCUT  = 400      # Kinetic Energy Cutoff in eV
+ ISTART = 0        # 0 new job
+ ICHARG = 2        # 2 atom charge superposition
+
+# VdW
+
+GGA = RE
+LUSE_VDW = .TRUE.
+AGGAC = 0.0000
+LASPH = .TRUE.
+
+# Spin
+
+ ISPIN   = 1         # 1- not spin 2- spin polarized
+ MAGMOM  = 2*1 54*0  # initial gess of magmom
+ NUPDOWN = 2         # triplet state
+
+# Electronic relaxation (SCF)
+
+ NELM   = 500       # Max Number of Elec Self Cons Steps
+ NELMIN = 8         # Min Number of ESC steps
+ EDIFF  = 1E-06     # Stopping criteria for ESC
+ LREAL  = auto      # Real space projection
+ ALGO   = Very Fast      # RMM-DIIS (IALGO = 48)
+
+# Ionic relaxation
+
+ SIGMA  = 0.05      # specifies the width of the smearing in eV
+ ISMEAR = 0         # gaussian smearing
+
+# Molecular dynamics
+
+ IBRION = 0        # molecular dynamics
+ NSW    = 500      # number of step in dynamics
+ SMASS  = -3       # micro canonical ensemble is simulated
+ POTIM  = 1        # time step in fs
+ ISYM   = 0        # simetry is switched off
+
+ IWAVPR = 1        # Simple extrapolation of WF in ionic step
+ AMIX = 0.4
+ AMIN = 0.1
+ BMIX = 1.0
+ AMIX_MAG = 1.6
+ BMIX_MAG = 1.0
+
+# use in VASP friction compilation
+
+ FRICTION =.TRUE.
+ FRICLIST = 56*0
+
+# Files to write
+
+ LWAVE  =.FALSE.
+ LCHARG =.FALSE.
+ NWRITE=0
+
+# Parallelisation
+
+ NPAR   = 8  # ~sqrt(n_cores)

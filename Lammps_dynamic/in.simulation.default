@@ -1,0 +1,95 @@
+# Input LAMMPS - dynamique H2 sur surface (avec couches mobiles/fixes)
+units        metal
+atom_style   atomic
+boundary     p p p
+atom_modify  map array
+
+read_data    ${DATAFILE}
+
+# Definitions de groupes : H, O, W, frozen, mobile (lues depuis groups.lmp)
+include      ${GROUPS_FILE}
+
+pair_style   deepmd ${folder}/graph.pb
+pair_coeff   * *
+
+# Geler les atomes du groupe "frozen"
+velocity     frozen set 0.0 0.0 0.0 units box
+fix          freeze_fixed frozen setforce 0 0 0
+
+
+# --- Groupes mono-atome pour H1 et H2 ---
+group H1 id 1
+group H2 id 2
+
+# --- Coordonnées non-wrappées via property/atom ---
+compute xH1 H1 property/atom xu
+compute yH1 H1 property/atom yu
+compute zH1 H1 property/atom zu
+compute xH2 H2 property/atom xu
+compute yH2 H2 property/atom yu
+compute zH2 H2 property/atom zu
+
+# --- Réduction vers scalaires (sum sur groupe 1 atome = la valeur) ---
+compute sxH1 H1 reduce sum c_xH1
+compute syH1 H1 reduce sum c_yH1
+compute szH1 H1 reduce sum c_zH1
+compute sxH2 H2 reduce sum c_xH2
+compute syH2 H2 reduce sum c_yH2
+compute szH2 H2 reduce sum c_zH2
+
+# --- Vitesses H1 et H2  ---
+compute vxH1 H1 property/atom vx
+compute vyH1 H1 property/atom vy
+compute vzH1 H1 property/atom vz
+compute vxH2 H2 property/atom vx
+compute vyH2 H2 property/atom vy
+compute vzH2 H2 property/atom vz
+
+compute svxH1 H1 reduce sum c_vxH1
+compute svyH1 H1 reduce sum c_vyH1
+compute svzH1 H1 reduce sum c_vzH1
+compute svxH2 H2 reduce sum c_vxH2
+compute svyH2 H2 reduce sum c_vyH2
+compute svzH2 H2 reduce sum c_vzH2
+
+
+# --- Run 0 : force l'initialisation des computes sans avancer le temps ---
+run 0
+
+# --- Variables de suivi H2 ---
+variable z_CM_H2 equal "(c_szH1+c_szH2)/2"
+variable r_HH    equal "sqrt((c_sxH1-c_sxH2)^2+(c_syH1-c_syH2)^2+(c_szH1-c_szH2)^2)"
+variable z_init  equal $(v_z_CM_H2)
+
+variable xu_CM equal "(c_sxH1+c_sxH2)/2"
+variable yu_CM equal "(c_syH1+c_syH2)/2"
+variable vx_CM equal "(c_svxH1+c_svxH2)/2"
+variable vy_CM equal "(c_svyH1+c_svyH2)/2"
+variable vz_CM equal "(c_svzH1+c_svzH2)/2"
+
+# --- Conditions d'arrêt ---
+fix halt_dissoc all halt 1 v_r_HH    > 2.2       error continue
+fix halt_escape all halt 1 v_z_CM_H2 > ${z_init} error continue
+
+timestep     __TSTEP__
+
+# Integration NVE uniquement sur les mobiles ("frozen" ne sont pas integres)
+fix          nve_mobile mobile nve
+
+fix print_HH all print 1 "${step} ${r_HH} ${xu_CM} ${yu_CM} ${z_CM_H2} ${vx_CM} ${vy_CM} ${vz_CM}" &
+    file ${CALCDIR}/HHcom_${i}.dat screen no &
+    title "step r_HH xu_CM yu_CM zu_CM vx_CM vy_CM vz_CM"
+
+dump         1 all custom 1 ${CALCDIR}/dump_${i}.lammpstrj id type x y z vx vy vz xu yu zu
+
+variable     etotal equal etotal
+variable     pe     equal pe
+variable     ke     equal ke
+variable     step   equal step
+
+fix          print_energy all print 1 "${step} ${pe} ${ke} ${etotal}" file ${CALCDIR}/energies_${i}.lammpstrj screen no title "Step PE KE Etot"
+
+thermo       100
+thermo_style custom step temp pe ke etotal v_r_HH v_z_CM_H2
+
+run          __NSTEP__
